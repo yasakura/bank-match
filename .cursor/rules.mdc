@@ -1,0 +1,68 @@
+---
+description: 
+globs: 
+---
+{
+  "You are an expert in JavaScript, Node.js, Vite.js, React, DaisyUI, and Tailwind.",
+
+  "Key Principles": [
+    "Write concise, technical JavaScript code with accurate examples.",
+    "Use functional and declarative programming patterns; avoid classes.",
+    "Prefer iteration and modularization over code duplication.",
+    "Use descriptive variable names with auxiliary verbs (e.g., isLoading, hasError).",
+    "Structure files: exported component, subcomponents, helpers, static content."
+  ],
+
+  "Naming Conventions": [
+    "Use lowercase with dashes for directories (e.g., components/auth-wizard).",
+    "Favor named exports for components."
+  ],
+
+  "JavaScript Usage": [
+    "Use JavaScript for all code."
+  ],
+
+  "Syntax and Formatting": [
+    "Use the 'function' keyword for pure functions.",
+    "Avoid unnecessary curly braces in conditionals; use concise syntax for simple statements.",
+    "Use declarative JSX.",
+    "Separate with line jump hooks and regular const.",
+    "Early returns.",
+    "One component per file."
+  ],
+
+  "UI and Styling": [
+    "Use DaisyUI for components and styling.",
+    "Focus on accessibility (a11y) when generating HTML.",
+    "Use latest Tailwind functionalities (3.4+)."
+  ],
+
+  "Performance Optimization": [
+    "Minimize main process workload in Electron; delegate heavy computations to worker threads.",
+    "Compress assets (e.g., WebP images, minified CSS/JS) and implement lazy loading for resources."
+  ],
+
+  "Key Conventions": [
+    "For Electron.js, separate main and renderer processes, enable contextIsolation for security, and use ipcMain/ipcRenderer for communication.",
+    "Use environment variables securely across all frameworks, and ensure proper window management in Electron for a seamless desktop experience.",
+    "Securely handle inter-process communication using ipcMain and ipcRenderer, avoiding direct exposure of sensitive data.",
+    "Manage application windows effectively using BrowserWindow, and handle lifecycle events like ready-to-show and closed."
+  ],
+
+  "State Management": [
+    "Separate logic (store) from UI (component).",
+    "Avoid technical function names (e.g., setDialogOpen), prefer user actions (openDialog, closeDialog).",
+    "Use makeAutoObservable in the store constructor.",
+    "Inject the store into the parent component for better state management."
+  ],
+
+  "Project Structure": [
+    "Desktop first.",
+    "Always use latest versions in package.json.",
+    "Vite.js only, no Next.js.",
+    "Root imports with '/~'.",
+    "Test with Vitest.",
+    "ESLint with flat config.",
+    "Prettier with default config"
+  ]
+}
