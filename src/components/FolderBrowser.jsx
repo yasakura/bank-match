@@ -1,12 +1,6 @@
 /* global console, setTimeout, clearTimeout */
 import React, { useState, useEffect } from "react";
-import {
-  FolderIcon,
-  ChevronRightIcon,
-  DocumentIcon,
-  XMarkIcon,
-  ChevronDownIcon,
-} from "@heroicons/react/24/outline";
+import { FolderIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import PropTypes from "prop-types";
 
 function FolderBrowser({ onFolderSelect }) {
@@ -14,8 +8,8 @@ function FolderBrowser({ onFolderSelect }) {
   const [isScanning, setIsScanning] = useState(false);
   const [showLoader, setShowLoader] = useState(false);
   const [folderStructure, setFolderStructure] = useState(null);
-  const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [selectedFolders, setSelectedFolders] = useState(new Set());
+  const [needsScan, setNeedsScan] = useState(false);
 
   useEffect(() => {
     let timeoutId;
@@ -31,95 +25,82 @@ function FolderBrowser({ onFolderSelect }) {
     };
   }, [isScanning]);
 
-  const toggleFolder = (path) => {
-    const newExpanded = new Set(expandedFolders);
-    if (newExpanded.has(path)) {
-      newExpanded.delete(path);
-    } else {
-      newExpanded.add(path);
-    }
-    setExpandedFolders(newExpanded);
-  };
+  // Effet pour gérer le scan après la mise à jour de selectedFolders
+  useEffect(() => {
+    const performScan = async () => {
+      if (needsScan && selectedPath) {
+        const newStructure = await scanFolder(selectedPath);
+        setFolderStructure(newStructure);
+        onFolderSelect(selectedPath, newStructure);
+        setNeedsScan(false);
+      }
+    };
 
-  const toggleFolderSelection = async (path, event) => {
+    performScan();
+  }, [selectedFolders, needsScan, selectedPath, onFolderSelect]);
+
+  const toggleFolderSelection = (path, event) => {
     event.stopPropagation();
     const newSelected = new Set(selectedFolders);
-    if (newSelected.has(path)) {
+    const wasSelected = newSelected.has(path);
+
+    if (wasSelected) {
       newSelected.delete(path);
     } else {
       newSelected.add(path);
     }
-    setSelectedFolders(newSelected);
 
-    if (selectedPath) {
-      await scanFolder(selectedPath);
-    }
+    setSelectedFolders(newSelected);
+    setNeedsScan(true);
   };
 
   const scanFolder = async (handle) => {
     setIsScanning(true);
     try {
       const structure = {
-        years: new Set(),
-        folders: 0,
-        files: 0,
         tree: {},
+        totalSubFolders: 0,
+        totalPdfFiles: 0,
       };
 
-      // Fonction pour créer ou obtenir un nœud dans l'arbre
-      const getNode = (path) => {
-        let current = structure.tree;
-        for (const segment of path) {
-          if (!current[segment]) {
-            current[segment] = { folders: {}, files: [] };
-          }
-          current = current[segment].folders;
-        }
-        return current;
-      };
-
-      // Parcours récursif du dossier
-      async function scanRecursive(handle, currentPath = []) {
+      async function scanRecursive(handle, currentPath = [], isRoot = false) {
         const entries = await handle.values();
-        const currentNode = getNode(currentPath);
-        const fullPath = currentPath.join("/");
-
-        // Si le dossier n'est pas sélectionné, on ne scanne pas son contenu
-        if (currentPath.length > 0 && !selectedFolders.has(fullPath)) {
-          return;
-        }
+        let currentFolderSubCount = 0;
 
         for await (const entry of entries) {
+          const rootFolder = currentPath[0];
+          const shouldCount = isRoot || selectedFolders.has(rootFolder);
+
           if (entry.kind === "directory") {
-            structure.folders++;
-            if (entry.name.match(/^20\d{2}$/)) {
-              structure.years.add(entry.name);
-            }
             const dirHandle = await handle.getDirectoryHandle(entry.name);
-            await scanRecursive(dirHandle, [...currentPath, entry.name]);
-          } else if (entry.name.toLowerCase().endsWith(".pdf")) {
-            structure.files++;
-            if (!currentNode.files) currentNode.files = [];
-            currentNode.files.push(entry.name);
+            const newPath = [...currentPath, entry.name];
+
+            if (isRoot) {
+              // Au premier niveau, on enregistre juste le dossier dans l'arbre
+              structure.tree[entry.name] = { folders: {}, files: [] };
+            } else if (selectedFolders.has(rootFolder)) {
+              // Si le dossier racine est sélectionné, on compte ce sous-dossier
+              structure.totalSubFolders++;
+            }
+
+            // On continue à scanner récursivement
+            const subCount = await scanRecursive(dirHandle, newPath, false);
+            currentFolderSubCount += subCount;
+          } else if (entry.name.toLowerCase().endsWith(".pdf") && shouldCount) {
+            // On compte les PDF si on est dans un dossier sélectionné ou à la racine
+            structure.totalPdfFiles++;
           }
         }
+
+        return currentFolderSubCount;
       }
 
-      await scanRecursive(handle);
-
-      // Conversion des données pour l'affichage
-      const stats = {
-        years: Array.from(structure.years).sort(),
-        folders: structure.folders,
-        files: structure.files,
-        tree: structure.tree,
-      };
-
-      setFolderStructure(stats);
-      onFolderSelect(handle, stats);
+      await scanRecursive(handle, [], true);
+      return structure;
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error("Erreur lors du scan du dossier:", err);
+      return null;
     } finally {
       setIsScanning(false);
     }
@@ -129,9 +110,10 @@ function FolderBrowser({ onFolderSelect }) {
     try {
       const handle = await window.showDirectoryPicker();
       setSelectedPath(handle);
-      setExpandedFolders(new Set());
       setSelectedFolders(new Set());
-      await scanFolder(handle);
+      const initialStructure = await scanFolder(handle);
+      setFolderStructure(initialStructure);
+      onFolderSelect(handle, initialStructure);
     } catch (err) {
       if (err.name !== "AbortError") {
         // eslint-disable-next-line no-console
@@ -143,81 +125,37 @@ function FolderBrowser({ onFolderSelect }) {
   const handleReset = () => {
     setSelectedPath(null);
     setFolderStructure(null);
-    setExpandedFolders(new Set());
     setSelectedFolders(new Set());
     onFolderSelect(null, null);
   };
 
-  const renderTree = (node, path = []) => {
-    if (!node) return null;
+  const renderFolders = () => {
+    if (!folderStructure?.tree) return null;
 
-    const currentPath = path.join("/");
-    const isExpanded = expandedFolders.has(currentPath);
-    const isSelected = selectedFolders.has(currentPath);
+    return Object.entries(folderStructure.tree).map(([name]) => {
+      const path = name;
+      const isSelected = selectedFolders.has(path);
 
-    return (
-      <div className="space-y-1">
-        {/* Afficher d'abord les sous-dossiers */}
-        {Object.entries(node).map(([name, content]) => {
-          if (!content.folders) return null;
-
-          const newPath = [...path, name];
-          const folderPath = newPath.join("/");
-          const hasSubItems =
-            Object.keys(content.folders).length > 0 ||
-            (content.files && content.files.length > 0);
-
-          return (
-            <div key={name} className="space-y-1">
-              <div className="flex items-center gap-2">
-                <label className="flex items-center gap-2 text-neutral/80 hover:text-neutral w-full cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="checkbox checkbox-sm checkbox-primary"
-                    checked={selectedFolders.has(folderPath)}
-                    onChange={(e) => toggleFolderSelection(folderPath, e)}
-                  />
-                  <button
-                    onClick={() => toggleFolder(folderPath)}
-                    className="flex items-center gap-2 flex-1"
-                  >
-                    <FolderIcon className="h-5 w-5 shrink-0" />
-                    <span className="truncate">{name}</span>
-                    {hasSubItems && (
-                      <div className="shrink-0">
-                        {isExpanded ? (
-                          <ChevronDownIcon className="h-4 w-4" />
-                        ) : (
-                          <ChevronRightIcon className="h-4 w-4" />
-                        )}
-                      </div>
-                    )}
-                  </button>
-                </label>
-              </div>
-              {isExpanded && hasSubItems && (
-                <div className="pl-6 space-y-1">
-                  {/* Afficher les sous-dossiers récursivement */}
-                  {renderTree(content.folders, newPath)}
-                  {/* Afficher les fichiers du dossier courant si sélectionné */}
-                  {isSelected &&
-                    content.files &&
-                    content.files.map((fileName) => (
-                      <div
-                        key={fileName}
-                        className="flex items-center gap-2 text-neutral/60"
-                      >
-                        <DocumentIcon className="h-4 w-4" />
-                        <span className="text-sm truncate">{fileName}</span>
-                      </div>
-                    ))}
-                </div>
-              )}
+      return (
+        <div
+          key={path}
+          className="flex items-center gap-4 py-2 px-2 hover:bg-base-200/50 rounded-lg"
+        >
+          <label className="flex items-center gap-2 text-neutral/80 hover:text-neutral w-full cursor-pointer">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-sm checkbox-primary"
+              checked={isSelected}
+              onChange={(e) => toggleFolderSelection(path, e)}
+            />
+            <div className="flex items-center gap-2">
+              <FolderIcon className="h-5 w-5 shrink-0" />
+              <span className="font-medium">{name}</span>
             </div>
-          );
-        })}
-      </div>
-    );
+          </label>
+        </div>
+      );
+    });
   };
 
   return (
@@ -271,11 +209,7 @@ function FolderBrowser({ onFolderSelect }) {
               </div>
               <div className="text-sm text-neutral/60">{selectedPath.name}</div>
             </div>
-            {folderStructure && (
-              <div className="pl-4 pt-2">
-                {renderTree(folderStructure.tree)}
-              </div>
-            )}
+            <div className="divide-y divide-base-300/50">{renderFolders()}</div>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-[200px] text-neutral/50">
@@ -291,24 +225,23 @@ function FolderBrowser({ onFolderSelect }) {
       {/* Informations et statistiques */}
       {folderStructure && (
         <div className="grid grid-cols-3 gap-4">
-          <div className="stat bg-base-200/70 rounded-xl p-4">
-            <div className="stat-title text-xs">Années</div>
-            <div className="stat-value text-lg">
-              {folderStructure.years.length}
+          <div className="stat bg-base-200/70 rounded-xl p-3">
+            <div className="stat-title text-[11px] truncate">
+              Dossiers sélectionnés
             </div>
-            <div className="stat-desc">{folderStructure.years.join("-")}</div>
-          </div>
-          <div className="stat bg-base-200/70 rounded-xl p-4">
-            <div className="stat-title text-xs">Dossiers sélectionnés</div>
             <div className="stat-value text-lg">{selectedFolders.size}</div>
-            <div className="stat-desc">
-              sur {folderStructure.folders} dossiers
+          </div>
+          <div className="stat bg-base-200/70 rounded-xl p-3">
+            <div className="stat-title text-[11px] truncate">Sous-dossiers</div>
+            <div className="stat-value text-lg">
+              {folderStructure.totalSubFolders}
             </div>
           </div>
-          <div className="stat bg-base-200/70 rounded-xl p-4">
-            <div className="stat-title text-xs">Factures</div>
-            <div className="stat-value text-lg">{folderStructure.files}</div>
-            <div className="stat-desc">PDF détectés</div>
+          <div className="stat bg-base-200/70 rounded-xl p-3">
+            <div className="stat-title text-[11px] truncate">Fichiers PDF</div>
+            <div className="stat-value text-lg">
+              {folderStructure.totalPdfFiles}
+            </div>
           </div>
         </div>
       )}
