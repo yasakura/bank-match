@@ -1,14 +1,20 @@
 import React, { useState } from "react";
 import CsvUploader from "./components/CsvUploader";
+import FolderBrowser from "./components/FolderBrowser";
 import Header from "./components/Header";
 
 function App() {
   const [transactions, setTransactions] = useState([]);
+  const [selectedFolder, setSelectedFolder] = useState(null);
 
   const handleDataLoaded = (data) => {
     setTransactions(data);
-    // eslint-disable-next-line no-console
+    // eslint-disable-next-line no-console, no-undef
     console.log("Données chargées:", data);
+  };
+
+  const handleFolderSelect = (folder) => {
+    setSelectedFolder(folder);
   };
 
   return (
@@ -27,19 +33,39 @@ function App() {
               </p>
             </div>
 
-            <div className="bg-base-200/50 rounded-xl p-6">
-              <CsvUploader onDataLoaded={handleDataLoaded} />
+            <div className="divider" />
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="space-y-4">
+                <h3 className="text-xl font-semibold text-neutral">
+                  1. Import du relevé bancaire
+                </h3>
+                <div className="bg-base-200/50 rounded-xl p-6">
+                  <CsvUploader onDataLoaded={handleDataLoaded} />
+                </div>
+                {transactions.length > 0 && (
+                  <div className="flex items-center gap-2 px-2">
+                    <div className="w-2 h-2 rounded-full bg-success"></div>
+                    <p className="text-sm text-neutral/70">
+                      {transactions.length} transactions chargées
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-xl font-semibold text-neutral">
+                  2. Sélection des factures
+                </h3>
+                <FolderBrowser onFolderSelect={handleFolderSelect} />
+              </div>
             </div>
 
-            {transactions.length > 0 && (
-              <div className="space-y-4">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-success"></div>
-                  <h3 className="text-xl font-semibold tracking-tight text-neutral">
-                    {transactions.length} transactions chargées
-                  </h3>
-                </div>
-                {/* Nous ajouterons le tableau des transactions ici plus tard */}
+            {transactions.length > 0 && selectedFolder && (
+              <div className="pt-4">
+                <button className="btn btn-primary w-full">
+                  Lancer le rapprochement
+                </button>
               </div>
             )}
           </div>
