@@ -17,6 +17,15 @@ function App() {
     setSelectedFolder(folder);
   };
 
+  const handleStartMatching = async () => {
+    // eslint-disable-next-line no-console, no-undef
+    console.log("Démarrage du rapprochement avec:", {
+      transactions: transactions.length,
+      folder: selectedFolder,
+    });
+    // TODO: Implémenter la logique de rapprochement
+  };
+
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-base-200/50 to-base-100">
       <Header />
@@ -57,17 +66,13 @@ function App() {
                 <h3 className="text-xl font-semibold text-neutral">
                   2. Sélection des factures
                 </h3>
-                <FolderBrowser onFolderSelect={handleFolderSelect} />
+                <FolderBrowser
+                  onFolderSelect={handleFolderSelect}
+                  hasTransactions={transactions.length > 0}
+                  onStartMatching={handleStartMatching}
+                />
               </div>
             </div>
-
-            {transactions.length > 0 && selectedFolder && (
-              <div className="pt-4">
-                <button className="btn btn-primary w-full">
-                  Lancer le rapprochement
-                </button>
-              </div>
-            )}
           </div>
         </div>
       </main>

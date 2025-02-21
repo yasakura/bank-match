@@ -1,9 +1,13 @@
 /* global console, setTimeout, clearTimeout */
 import React, { useState, useEffect } from "react";
-import { FolderIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import {
+  FolderIcon,
+  XMarkIcon,
+  ArrowPathIcon,
+} from "@heroicons/react/24/outline";
 import PropTypes from "prop-types";
 
-function FolderBrowser({ onFolderSelect }) {
+function FolderBrowser({ onFolderSelect, hasTransactions, onStartMatching }) {
   const [selectedPath, setSelectedPath] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [showLoader, setShowLoader] = useState(false);
@@ -245,12 +249,31 @@ function FolderBrowser({ onFolderSelect }) {
           </div>
         </div>
       )}
+
+      {/* Bouton de rapprochement */}
+      <button
+        onClick={onStartMatching}
+        className={`btn btn-primary w-full gap-2 ${
+          !(hasTransactions && selectedFolders.size > 0) ? "hidden" : ""
+        }`}
+        disabled={isScanning}
+      >
+        <ArrowPathIcon className="h-5 w-5" />
+        Lancer le rapprochement bancaire
+      </button>
     </div>
   );
 }
 
 FolderBrowser.propTypes = {
   onFolderSelect: PropTypes.func.isRequired,
+  hasTransactions: PropTypes.bool,
+  onStartMatching: PropTypes.func,
+};
+
+FolderBrowser.defaultProps = {
+  hasTransactions: false,
+  onStartMatching: () => {},
 };
 
 export default FolderBrowser;

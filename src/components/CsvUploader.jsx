@@ -12,26 +12,71 @@ import PropTypes from "prop-types";
 function CsvUploader({ onDataLoaded }) {
   const [currentFile, setCurrentFile] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState(null);
+
+  const processTransactions = (data) => {
+    // Trouver l'index de la ligne d'en-tête des colonnes
+    const headerIndex = data.findIndex(
+      (row) => row && typeof row[0] === "string" && row[0].startsWith("Date")
+    );
+
+    if (headerIndex === -1) {
+      throw new Error(
+        "Format invalide : impossible de trouver les en-têtes des colonnes"
+      );
+    }
+
+    // Extraire les transactions (toutes les lignes après l'en-tête)
+    const transactions = data
+      .slice(headerIndex + 1)
+      .filter((row) => row && row.length >= 5) // Vérifier qu'on a au moins les colonnes essentielles
+      .map((row) => ({
+        date: row[0],
+        reference: row[1],
+        libelle: row[2],
+        montant: row[3]
+          ? -parseFloat(row[3].replace(",", "."))
+          : row[4]
+          ? parseFloat(row[4].replace(",", "."))
+          : 0,
+        detail: row[5] || "",
+      }));
+
+    if (transactions.length === 0) {
+      throw new Error("Aucune transaction trouvée dans le fichier");
+    }
+
+    return transactions;
+  };
 
   const onDrop = useCallback(
     (acceptedFiles) => {
       const file = acceptedFiles[0];
       if (file) {
         setIsProcessing(true);
+        setError(null);
         setCurrentFile(file);
 
         Papa.parse(file, {
           complete: (results) => {
-            const { data, errors } = results;
-            if (errors.length === 0) {
-              onDataLoaded(data);
-            } else {
-              // eslint-disable-next-line no-console
-              console.error("Erreur lors du parsing du CSV:", errors);
+            try {
+              const transactions = processTransactions(results.data);
+              onDataLoaded(transactions);
+              setIsProcessing(false);
+            } catch (err) {
+              setError(err.message);
+              onDataLoaded([]);
+              setIsProcessing(false);
             }
-            setIsProcessing(false);
           },
-          header: true,
+          error: (error) => {
+            setError(`Erreur de lecture : ${error.message}`);
+            setIsProcessing(false);
+            onDataLoaded([]);
+          },
+          delimiter: ";",
+          encoding: "UTF-8",
+          header: false, // On gère nous-mêmes les en-têtes
           skipEmptyLines: true,
         });
       }
@@ -43,6 +88,8 @@ function CsvUploader({ onDataLoaded }) {
     onDrop,
     accept: {
       "text/csv": [".csv"],
+      "application/vnd.ms-excel": [".csv"],
+      "text/plain": [".csv"],
     },
     multiple: false,
   });
@@ -50,6 +97,7 @@ function CsvUploader({ onDataLoaded }) {
   const handleReset = (e) => {
     e.stopPropagation();
     setCurrentFile(null);
+    setError(null);
     onDataLoaded([]);
   };
 
@@ -62,6 +110,8 @@ function CsvUploader({ onDataLoaded }) {
           ${
             isDragActive
               ? "border-primary bg-primary/5 shadow-primary/20"
+              : error
+              ? "border-error bg-error/5 shadow-error/20"
               : currentFile
               ? "border-success bg-success/5 shadow-success/20"
               : "border-base-300 hover:border-primary bg-base-100 hover:bg-base-200/50"
@@ -74,7 +124,9 @@ function CsvUploader({ onDataLoaded }) {
             <div className="flex items-center justify-center gap-3 text-success">
               <CheckCircleIcon className="h-10 w-10" />
               <span className="text-xl font-semibold tracking-tight">
-                Fichier chargé avec succès
+                {error
+                  ? "Erreur de lecture du fichier"
+                  : "Fichier chargé avec succès"}
               </span>
             </div>
             <div className="flex items-center justify-center gap-3 text-neutral/70">
@@ -88,14 +140,16 @@ function CsvUploader({ onDataLoaded }) {
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
-            {isProcessing && (
+            {isProcessing ? (
               <div className="mt-4">
                 <div className="loading loading-dots loading-md"></div>
                 <p className="text-sm text-neutral/60 mt-2">
                   Analyse du fichier en cours...
                 </p>
               </div>
-            )}
+            ) : error ? (
+              <div className="mt-4 text-error text-sm">{error}</div>
+            ) : null}
           </div>
         ) : isDragActive ? (
           <div className="space-y-6">
@@ -113,9 +167,13 @@ function CsvUploader({ onDataLoaded }) {
                 <br />
                 votre relevé bancaire
               </p>
-              <p className="text-base text-neutral/60 tracking-wide">
-                Format accepté : CSV
-              </p>
+              <div className="text-base text-neutral/60 tracking-wide space-y-2">
+                <p>Format accepté : CSV Caisse d&apos;Épargne (UTF-8)</p>
+                <p className="text-sm">
+                  Colonnes attendues : Date, Numéro d&apos;opération, Libellé,
+                  Débit, Crédit, Détail
+                </p>
+              </div>
             </div>
           </div>
         )}
