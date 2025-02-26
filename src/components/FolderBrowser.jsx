@@ -7,7 +7,12 @@ import {
 } from "@heroicons/react/24/outline";
 import PropTypes from "prop-types";
 
-function FolderBrowser({ onFolderSelect, hasTransactions, onStartMatching }) {
+function FolderBrowser({
+  onFolderSelect,
+  onFoldersSelected,
+  hasTransactions,
+  onStartMatching,
+}) {
   const [selectedPath, setSelectedPath] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [showLoader, setShowLoader] = useState(false);
@@ -55,6 +60,7 @@ function FolderBrowser({ onFolderSelect, hasTransactions, onStartMatching }) {
     }
 
     setSelectedFolders(newSelected);
+    onFoldersSelected(newSelected);
     setNeedsScan(true);
   };
 
@@ -130,6 +136,7 @@ function FolderBrowser({ onFolderSelect, hasTransactions, onStartMatching }) {
     setSelectedPath(null);
     setFolderStructure(null);
     setSelectedFolders(new Set());
+    onFoldersSelected(new Set());
     onFolderSelect(null, null);
   };
 
@@ -267,6 +274,7 @@ function FolderBrowser({ onFolderSelect, hasTransactions, onStartMatching }) {
 
 FolderBrowser.propTypes = {
   onFolderSelect: PropTypes.func.isRequired,
+  onFoldersSelected: PropTypes.func.isRequired,
   hasTransactions: PropTypes.bool,
   onStartMatching: PropTypes.func,
 };

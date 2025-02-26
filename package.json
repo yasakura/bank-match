@@ -12,7 +12,9 @@
   "dependencies": {
     "@heroicons/react": "^2.2.0",
     "@types/papaparse": "^5.3.15",
+    "@types/pdfjs-dist": "^2.10.378",
     "papaparse": "^5.5.2",
+    "pdfjs-dist": "^4.10.38",
     "prop-types": "^15.8.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

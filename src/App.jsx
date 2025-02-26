@@ -24,6 +24,10 @@ function App() {
     }
   };
 
+  const handleFoldersSelected = (folders) => {
+    setSelectedFolders(folders);
+  };
+
   const handleStartMatching = async () => {
     setShowMatcher(true);
   };
@@ -70,6 +74,7 @@ function App() {
                 </h3>
                 <FolderBrowser
                   onFolderSelect={handleFolderSelect}
+                  onFoldersSelected={handleFoldersSelected}
                   hasTransactions={transactions.length > 0}
                   onStartMatching={handleStartMatching}
                 />
