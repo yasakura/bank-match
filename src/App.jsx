@@ -1,11 +1,14 @@
 import React, { useState } from "react";
 import CsvUploader from "./components/CsvUploader";
 import FolderBrowser from "./components/FolderBrowser";
+import BankMatcher from "./components/BankMatcher";
 import Header from "./components/Header";
 
 function App() {
   const [transactions, setTransactions] = useState([]);
   const [selectedFolder, setSelectedFolder] = useState(null);
+  const [selectedFolders, setSelectedFolders] = useState(new Set());
+  const [showMatcher, setShowMatcher] = useState(false);
 
   const handleDataLoaded = (data) => {
     setTransactions(data);
@@ -13,17 +16,16 @@ function App() {
     console.log("Données chargées:", data);
   };
 
-  const handleFolderSelect = (folder) => {
-    setSelectedFolder(folder);
+  const handleFolderSelect = (handle, structure) => {
+    setSelectedFolder(handle);
+    // Réinitialiser les dossiers sélectionnés si on change de dossier racine
+    if (!handle) {
+      setSelectedFolders(new Set());
+    }
   };
 
   const handleStartMatching = async () => {
-    // eslint-disable-next-line no-console, no-undef
-    console.log("Démarrage du rapprochement avec:", {
-      transactions: transactions.length,
-      folder: selectedFolder,
-    });
-    // TODO: Implémenter la logique de rapprochement
+    setShowMatcher(true);
   };
 
   return (
@@ -76,6 +78,16 @@ function App() {
           </div>
         </div>
       </main>
+
+      {/* Modal de rapprochement */}
+      {showMatcher && (
+        <BankMatcher
+          transactions={transactions}
+          folderHandle={selectedFolder}
+          selectedFolders={selectedFolders}
+          onClose={() => setShowMatcher(false)}
+        />
+      )}
     </div>
   );
 }
