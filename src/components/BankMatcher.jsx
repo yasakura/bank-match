@@ -13,7 +13,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
   const [matchingStatus, setMatchingStatus] = useState("idle"); // idle, matching, done
-  const [matches, setMatches] = useState(new Map()); // Map<transactionRef, {pdfHandle, score}>
+  const [matches, setMatches] = useState(new Map()); // Map<transactionRef, {pdfHandle, path, fileDate}>
   const [progress, setProgress] = useState(0);
   const [pdfCache, setPdfCache] = useState(new Map()); // Cache pour stocker le contenu des PDF
   const [dateRange, setDateRange] = useState({ start: null, end: null });
@@ -901,7 +901,6 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
           newMatches.set(transaction.reference, {
             handle: match.handle,
             path: match.path,
-            score: 100,
             fileDate: match.fileDate,
           });
         } else {
@@ -1042,9 +1041,6 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
                                 <div className="w-2 h-2 rounded-full bg-success" />
                                 <div className="truncate text-sm">
                                   {match.path.split("/").pop()}
-                                  <span className="text-xs text-neutral/50 ml-2">
-                                    ({Math.round(match.score)}%)
-                                  </span>
                                 </div>
                               </div>
                             ) : (
