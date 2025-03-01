@@ -7,6 +7,10 @@ import {
   recognizeText,
   terminateTesseractWorker,
 } from "../utils/tesseract-utils";
+import {
+  loadIgnoredPatterns,
+  shouldIgnoreTransaction,
+} from "../utils/config-utils";
 
 // Initialiser le worker PDF.js
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
@@ -18,6 +22,18 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
   const [pdfCache, setPdfCache] = useState(new Map()); // Cache pour stocker le contenu des PDF
   const [dateRange, setDateRange] = useState({ start: null, end: null });
   const [manuallyMarked, setManuallyMarked] = useState(new Set()); // Ensemble des transactions marquées manuellement comme traitées
+  const [ignoredPatterns, setIgnoredPatterns] = useState([]); // Patterns de transactions à ignorer
+
+  // Charger les patterns ignorés au démarrage
+  useEffect(() => {
+    const fetchIgnoredPatterns = async () => {
+      const patterns = await loadIgnoredPatterns();
+      console.log("Patterns ignorés chargés:", patterns);
+      setIgnoredPatterns(patterns);
+    };
+
+    fetchIgnoredPatterns();
+  }, []);
 
   // Désactiver le scroll du body quand la modale est ouverte
   useEffect(() => {
@@ -308,6 +324,12 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
         const isCBTransaction = t.libelle.startsWith("CB");
         let cbDate = null;
         const vendorName = extractVendorName(t.libelle);
+        const isIgnored = shouldIgnoreTransaction(t.libelle, ignoredPatterns);
+
+        // eslint-disable-next-line no-console, no-undef
+        console.log(
+          `Analyse transaction: "${t.libelle}" - Ignorée: ${isIgnored}`
+        );
 
         // Extraire la date des opérations CB si présente
         if (isCBTransaction) {
@@ -368,11 +390,24 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
           isCBTransaction,
           cbDate,
           vendorName,
+          isIgnored,
         };
       });
 
+      // Filtrer les transactions à ignorer
+      const transactionsToProcess = parsedTransactions.filter(
+        (t) => !t.isIgnored
+      );
+
+      // eslint-disable-next-line no-console, no-undef
+      console.log(
+        `${
+          parsedTransactions.length - transactionsToProcess.length
+        } transactions ignorées sur ${parsedTransactions.length} au total`
+      );
+
       // 2. Calcul de la plage de dates du CSV
-      const dates = parsedTransactions.map((t) => t.parsedDate);
+      const dates = transactionsToProcess.map((t) => t.parsedDate);
       const endDate = new Date(Math.max(...dates));
       const startDate = new Date(Math.min(...dates));
       startDate.setDate(startDate.getDate() - 45); // Étendre la date de début de 45 jours dans le passé
@@ -472,7 +507,7 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
       const newMatches = new Map();
       let processed = 0;
 
-      for (const transaction of parsedTransactions) {
+      for (const transaction of transactionsToProcess) {
         // eslint-disable-next-line no-console, no-undef
         console.log("\n=== Nouvelle recherche ===");
         // eslint-disable-next-line no-console, no-undef
@@ -1026,8 +1061,21 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
                   <tbody>
                     {transactions.map((transaction) => {
                       const match = matches.get(transaction.reference);
+                      const isIgnored = shouldIgnoreTransaction(
+                        transaction.libelle,
+                        ignoredPatterns
+                      );
+
+                      // eslint-disable-next-line no-console, no-undef
+                      console.log(
+                        `Transaction ${transaction.reference}: "${transaction.libelle}" - Ignorée: ${isIgnored}`
+                      );
+
                       return (
-                        <tr key={transaction.reference}>
+                        <tr
+                          key={transaction.reference}
+                          className={isIgnored ? "opacity-50 bg-base-300" : ""}
+                        >
                           <td className="whitespace-nowrap">
                             {formatDate(transaction.date)}
                           </td>
@@ -1059,7 +1107,14 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
                             {matchingStatus === "matching" ? (
                               <div className="loading loading-dots loading-xs" />
                             ) : matchingStatus === "done" ? (
-                              match ? (
+                              isIgnored ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 rounded-full bg-neutral" />
+                                  <span className="text-sm text-neutral/70">
+                                    Transaction ignorée
+                                  </span>
+                                </div>
+                              ) : match ? (
                                 <div className="flex items-center gap-2">
                                   <div className="w-2 h-2 rounded-full bg-success" />
                                   <div className="truncate text-sm">
@@ -1085,7 +1140,9 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
                           </td>
                           <td>
                             {matchingStatus === "done" ? (
-                              match ? (
+                              isIgnored ? (
+                                <span className="text-neutral/50">-</span>
+                              ) : match ? (
                                 <button
                                   className="btn btn-ghost btn-sm text-error w-32"
                                   onClick={() =>
