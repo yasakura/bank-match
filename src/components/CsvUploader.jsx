@@ -26,25 +26,59 @@ function CsvUploader({ onDataLoaded }) {
       );
     }
 
+    // eslint-disable-next-line no-console, no-undef
+    console.log("En-têtes trouvées à l'index:", headerIndex);
+    // eslint-disable-next-line no-console, no-undef
+    console.log("En-têtes:", data[headerIndex]);
+
     // Extraire les transactions (toutes les lignes après l'en-tête)
     const transactions = data
       .slice(headerIndex + 1)
       .filter((row) => row && row.length >= 5) // Vérifier qu'on a au moins les colonnes essentielles
-      .map((row) => ({
-        date: row[0],
-        reference: row[1],
-        libelle: row[2],
-        montant: row[3]
-          ? -parseFloat(row[3].replace(",", "."))
-          : row[4]
-          ? parseFloat(row[4].replace(",", "."))
-          : 0,
-        detail: row[5] || "",
-      }));
+      .map((row) => {
+        // Déterminer si c'est un débit ou un crédit
+        const debitStr = row[3] && row[3].trim();
+        const creditStr = row[4] && row[4].trim();
+
+        // Calculer le montant avec le signe approprié
+        let montant = 0;
+
+        if (debitStr) {
+          // Pour un débit, le montant doit être négatif
+          // Enlever le signe - s'il est déjà présent dans la chaîne
+          const debitValue = debitStr.replace(/^-/, "").replace(",", ".");
+          montant = -Math.abs(parseFloat(debitValue)); // Assurer que c'est négatif
+        } else if (creditStr) {
+          // Pour un crédit, le montant doit être positif
+          // Enlever le signe + s'il est présent dans la chaîne
+          const creditValue = creditStr.replace(/^\+/, "").replace(",", ".");
+          montant = Math.abs(parseFloat(creditValue)); // Assurer que c'est positif
+        }
+
+        // eslint-disable-next-line no-console, no-undef
+        console.log(
+          `Transaction: ${
+            row[2]
+          }, Débit: ${debitStr}, Crédit: ${creditStr}, Montant calculé: ${montant}, Est négatif: ${
+            montant < 0
+          }`
+        );
+
+        return {
+          date: row[0],
+          reference: row[1],
+          libelle: row[2],
+          montant: montant,
+          detail: row[5] || "",
+        };
+      });
 
     if (transactions.length === 0) {
       throw new Error("Aucune transaction trouvée dans le fichier");
     }
+
+    // eslint-disable-next-line no-console, no-undef
+    console.log("Transactions traitées:", transactions);
 
     return transactions;
   };

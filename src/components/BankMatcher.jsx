@@ -11,6 +11,7 @@ import {
   loadIgnoredPatterns,
   shouldIgnoreTransaction,
 } from "../utils/config-utils";
+import ignoredTransactionsData from "../data/ignored-transactions.json";
 
 // Initialiser le worker PDF.js
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
@@ -22,7 +23,9 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
   const [pdfCache, setPdfCache] = useState(new Map()); // Cache pour stocker le contenu des PDF
   const [dateRange, setDateRange] = useState({ start: null, end: null });
   const [manuallyMarked, setManuallyMarked] = useState(new Set()); // Ensemble des transactions marquées manuellement comme traitées
-  const [ignoredPatterns, setIgnoredPatterns] = useState([]); // Patterns de transactions à ignorer
+  const [ignoredPatterns, setIgnoredPatterns] = useState(
+    ignoredTransactionsData.ignoredPatterns || []
+  );
 
   // Charger les patterns ignorés au démarrage
   useEffect(() => {
@@ -320,7 +323,11 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
       const parsedTransactions = transactions.map((t) => {
         const formattedDate = formatDate(t.date);
         let transactionDate = new Date(formattedDate);
-        const amount = Math.abs(t.montant);
+
+        // S'assurer que le montant est un nombre et préserver son signe
+        const amount =
+          typeof t.montant === "string" ? parseFloat(t.montant) : t.montant;
+
         const isCBTransaction = t.libelle.startsWith("CB");
         let cbDate = null;
         const vendorName = extractVendorName(t.libelle);
@@ -328,7 +335,9 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
 
         // eslint-disable-next-line no-console, no-undef
         console.log(
-          `Analyse transaction: "${t.libelle}" - Ignorée: ${isIgnored}`
+          `Analyse transaction: "${t.libelle}" - Montant original: ${
+            t.montant
+          } (${typeof t.montant}), Montant traité: ${amount} - Ignorée: ${isIgnored}`
         );
 
         // Extraire la date des opérations CB si présente
@@ -611,7 +620,7 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
           // 2. Vérifier si l'une de ces factures contient le montant recherché
           const exactDateAndAmountMatches = exactDatePdfs.filter((pdf) =>
             pdf.amounts.some(
-              (amount) => Math.abs(amount - transaction.amount) < 0.01
+              (amount) => Math.abs(amount - Math.abs(transaction.amount)) < 0.01
             )
           );
 
@@ -629,31 +638,31 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
             const sortedByAmountProximity = [...exactDatePdfs].sort((a, b) => {
               const aClosestAmount = a.amounts.reduce(
                 (closest, amount) =>
-                  Math.abs(amount - transaction.amount) <
-                  Math.abs(closest - transaction.amount)
+                  Math.abs(amount - Math.abs(transaction.amount)) <
+                  Math.abs(closest - Math.abs(transaction.amount))
                     ? amount
                     : closest,
                 a.amounts[0]
               );
               const bClosestAmount = b.amounts.reduce(
                 (closest, amount) =>
-                  Math.abs(amount - transaction.amount) <
-                  Math.abs(closest - transaction.amount)
+                  Math.abs(amount - Math.abs(transaction.amount)) <
+                  Math.abs(closest - Math.abs(transaction.amount))
                     ? amount
                     : closest,
                 b.amounts[0]
               );
               return (
-                Math.abs(aClosestAmount - transaction.amount) -
-                Math.abs(bClosestAmount - transaction.amount)
+                Math.abs(aClosestAmount - Math.abs(transaction.amount)) -
+                Math.abs(bClosestAmount - Math.abs(transaction.amount))
               );
             });
 
             match = sortedByAmountProximity[0];
             const closestAmount = match.amounts.reduce(
               (closest, amount) =>
-                Math.abs(amount - transaction.amount) <
-                Math.abs(closest - transaction.amount)
+                Math.abs(amount - Math.abs(transaction.amount)) <
+                Math.abs(closest - Math.abs(transaction.amount))
                   ? amount
                   : closest,
               match.amounts[0]
@@ -666,7 +675,7 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
               } (montant le plus proche: ${closestAmount.toFixed(
                 2
               )}, différence: ${Math.abs(
-                closestAmount - transaction.amount
+                closestAmount - Math.abs(transaction.amount)
               ).toFixed(2)})`
             );
           }
@@ -680,7 +689,8 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
                 pdf.fileDate.getMonth() === transaction.parsedDate.getMonth() &&
                 pdf.fileDate.getDate() === transaction.parsedDate.getDate() &&
                 pdf.amounts.some(
-                  (amount) => Math.abs(amount - transaction.amount) < 0.01
+                  (amount) =>
+                    Math.abs(amount - Math.abs(transaction.amount)) < 0.01
                 )
             );
 
@@ -694,7 +704,8 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
               // Filtrer d'abord par montant
               const amountMatches = structuredPdfData.filter((pdf) =>
                 pdf.amounts.some(
-                  (amount) => Math.abs(amount - transaction.amount) < 0.01
+                  (amount) =>
+                    Math.abs(amount - Math.abs(transaction.amount)) < 0.01
                 )
               );
 
@@ -959,10 +970,29 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
   };
 
   const formatAmount = (amount) => {
-    return new Intl.NumberFormat("fr-FR", {
+    // Convertir en nombre si c'est une chaîne
+    const numAmount = typeof amount === "string" ? parseFloat(amount) : amount;
+
+    // Log pour déboguer
+    // eslint-disable-next-line no-console, no-undef
+    console.log(
+      `formatAmount - montant reçu: ${amount}, type: ${typeof amount}, converti: ${numAmount}, est négatif: ${
+        numAmount < 0
+      }`
+    );
+
+    const formattedAmount = new Intl.NumberFormat("fr-FR", {
       style: "currency",
       currency: "EUR",
-    }).format(amount);
+      signDisplay: "never", // Ne pas afficher le signe automatiquement
+    }).format(Math.abs(numAmount));
+
+    // Ajouter manuellement le signe + ou -
+    const result =
+      numAmount < 0 ? `-${formattedAmount}` : `+${formattedAmount}`;
+    // eslint-disable-next-line no-console, no-undef
+    console.log(`formatAmount - résultat: ${result}`);
+    return result;
   };
 
   // Fonction pour supprimer une correspondance
@@ -1096,11 +1126,19 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
                           </td>
                           <td
                             className={`whitespace-nowrap font-medium ${
-                              transaction.montant < 0
+                              parseFloat(transaction.montant) < 0
                                 ? "text-error"
                                 : "text-success"
                             }`}
                           >
+                            {/* eslint-disable-next-line no-console, no-undef */}
+                            {console.log(
+                              `Montant avant formatage: ${
+                                transaction.montant
+                              }, type: ${typeof transaction.montant}, est négatif: ${
+                                parseFloat(transaction.montant) < 0
+                              }`
+                            )}
                             {formatAmount(transaction.montant)}
                           </td>
                           <td>

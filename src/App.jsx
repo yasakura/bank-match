@@ -11,9 +11,30 @@ function App() {
   const [showMatcher, setShowMatcher] = useState(false);
 
   const handleDataLoaded = (data) => {
-    setTransactions(data);
+    // Vérifier que les montants sont bien des nombres avec leur signe
+    const dataWithCheckedAmounts = data.map((transaction) => {
+      // S'assurer que le montant est un nombre
+      const montant =
+        typeof transaction.montant === "string"
+          ? parseFloat(transaction.montant)
+          : transaction.montant;
+
+      // eslint-disable-next-line no-console, no-undef
+      console.log(
+        `Transaction: ${transaction.libelle}, Montant original: ${
+          transaction.montant
+        }, Type: ${typeof transaction.montant}, Montant vérifié: ${montant}`
+      );
+
+      return {
+        ...transaction,
+        montant: montant,
+      };
+    });
+
+    setTransactions(dataWithCheckedAmounts);
     // eslint-disable-next-line no-console, no-undef
-    console.log("Données chargées:", data);
+    console.log("Données chargées:", dataWithCheckedAmounts);
   };
 
   const handleFolderSelect = (handle, structure) => {

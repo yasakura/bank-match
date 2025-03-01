@@ -1,0 +1,11 @@
+{
+  "ignoredPatterns": [
+    "VIREMENT SEPA RECU",
+    "VIREMENT EMIS",
+    "PRELEVEMENT",
+    "COTISATION",
+    "INTERETS",
+    "COMMISSION",
+    "FRAIS"
+  ]
+}
