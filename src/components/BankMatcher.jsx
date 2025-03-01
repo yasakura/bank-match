@@ -270,6 +270,30 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
     }
   };
 
+  // Extraire le nom du fournisseur du libellé de la transaction
+  const extractVendorName = (libelle) => {
+    // Pour les transactions CB, extraire le nom après "CB "
+    if (libelle.startsWith("CB ")) {
+      // Prendre le texte entre "CB " et le premier espace ou caractère spécial
+      const match = libelle.substring(3).match(/^([A-Za-z0-9\.\-\_]+)/);
+      if (match) {
+        return match[1].toLowerCase();
+      }
+    }
+    return null;
+  };
+
+  // Vérifier si un nom de fichier contient le nom du fournisseur
+  const fileNameContainsVendor = (fileName, vendorName) => {
+    if (!vendorName) return false;
+
+    // Normaliser le nom de fichier (enlever les extensions, convertir en minuscules)
+    const normalizedFileName = fileName.split(".")[0].toLowerCase();
+
+    // Vérifier si le nom du fournisseur est présent dans le nom de fichier
+    return normalizedFileName.includes(vendorName);
+  };
+
   const startMatching = async () => {
     setMatchingStatus("matching");
     setProgress(0);
@@ -282,17 +306,57 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
         const amount = Math.abs(t.montant);
         const isCBTransaction = t.libelle.startsWith("CB");
         let cbDate = null;
+        const vendorName = extractVendorName(t.libelle);
 
         // Extraire la date des opérations CB si présente
         if (isCBTransaction) {
-          const cbDateMatch = t.libelle.match(/\[(\d{6})\]/);
+          // Format [JJMMAA]
+          let cbDateMatch = t.libelle.match(/\[(\d{6})\]/);
+
+          // Si pas de correspondance, chercher n'importe quel format JJMMAA dans le libellé
+          if (!cbDateMatch) {
+            // Rechercher un groupe de 6 chiffres qui pourrait être une date
+            const matches = t.libelle.match(/\b(\d{6})\b/g);
+
+            if (matches && matches.length > 0) {
+              // Prendre le premier groupe de 6 chiffres trouvé
+              // On pourrait aussi prendre le dernier avec matches[matches.length - 1]
+              cbDateMatch = [matches[0], matches[0]];
+
+              // eslint-disable-next-line no-console, no-undef
+              console.log(
+                `Format JJMMAA trouvé dans le libellé: ${matches[0]}`
+              );
+            }
+          }
+
           if (cbDateMatch) {
             const [, cbDateStr] = cbDateMatch;
             const day = cbDateStr.substring(0, 2);
             const month = cbDateStr.substring(2, 4);
             const year = "20" + cbDateStr.substring(4, 6);
-            cbDate = new Date(year, parseInt(month) - 1, parseInt(day));
-            transactionDate = cbDate;
+
+            // Vérifier que les valeurs extraites forment une date valide
+            if (
+              parseInt(day) >= 1 &&
+              parseInt(day) <= 31 &&
+              parseInt(month) >= 1 &&
+              parseInt(month) <= 12 &&
+              parseInt(year) >= 2000
+            ) {
+              cbDate = new Date(year, parseInt(month) - 1, parseInt(day));
+              transactionDate = cbDate;
+
+              // eslint-disable-next-line no-console, no-undef
+              console.log(
+                `Date extraite du libellé CB: ${day}/${month}/${year} (${cbDateStr})`
+              );
+            } else {
+              // eslint-disable-next-line no-console, no-undef
+              console.log(
+                `Format JJMMAA trouvé (${cbDateStr}) mais ne semble pas être une date valide`
+              );
+            }
           }
         }
 
@@ -302,6 +366,7 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
           amount,
           isCBTransaction,
           cbDate,
+          vendorName,
         };
       });
 
@@ -420,135 +485,410 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
         // Stratégie de matching
         let match = null;
 
-        // a. Chercher une correspondance exacte de date
-        const exactDateMatches = structuredPdfData.filter(
-          (pdf) =>
-            pdf.fileDate.getFullYear() ===
-              transaction.parsedDate.getFullYear() &&
-            pdf.fileDate.getMonth() === transaction.parsedDate.getMonth() &&
-            pdf.fileDate.getDate() === transaction.parsedDate.getDate() &&
-            pdf.amounts.some(
-              (amount) => Math.abs(amount - transaction.amount) < 0.01
-            )
-        );
-
-        if (exactDateMatches.length > 0) {
-          match = exactDateMatches[0];
+        // Nouvelle approche: d'abord chercher les factures par nom de fournisseur si disponible
+        if (transaction.vendorName) {
           // eslint-disable-next-line no-console, no-undef
-          console.log(`Match exact trouvé: ${match.fileName}`);
+          console.log(`Nom du fournisseur extrait: ${transaction.vendorName}`);
+
+          // Chercher les factures dont le nom contient le nom du fournisseur
+          const vendorMatches = structuredPdfData.filter((pdf) =>
+            fileNameContainsVendor(pdf.fileName, transaction.vendorName)
+          );
+
+          // eslint-disable-next-line no-console, no-undef
+          console.log(
+            `Factures correspondant au fournisseur: ${vendorMatches.length}`
+          );
+
+          if (vendorMatches.length > 0) {
+            // Filtrer par proximité de date (même mois ou mois adjacent)
+            const dateFilteredMatches = vendorMatches.filter((pdf) => {
+              const pdfMonth = pdf.fileDate.getMonth();
+              const pdfYear = pdf.fileDate.getFullYear();
+              const refMonth = transaction.parsedDate.getMonth();
+              const refYear = transaction.parsedDate.getFullYear();
+
+              // Même mois ou mois adjacent (±1)
+              return (
+                (pdfMonth === refMonth && pdfYear === refYear) || // Même mois
+                (Math.abs(pdfMonth - refMonth) === 1 && pdfYear === refYear) || // Mois adjacent même année
+                (pdfMonth === 11 &&
+                  refMonth === 0 &&
+                  pdfYear === refYear - 1) || // Décembre → Janvier
+                (pdfMonth === 0 && refMonth === 11 && pdfYear === refYear + 1) // Janvier → Décembre
+              );
+            });
+
+            if (dateFilteredMatches.length > 0) {
+              // Trier par proximité de date
+              const sortedByDateProximity = [...dateFilteredMatches].sort(
+                (a, b) => {
+                  const aDiff = Math.abs(
+                    a.fileDate.getTime() - transaction.parsedDate.getTime()
+                  );
+                  const bDiff = Math.abs(
+                    b.fileDate.getTime() - transaction.parsedDate.getTime()
+                  );
+                  return aDiff - bDiff;
+                }
+              );
+
+              match = sortedByDateProximity[0];
+              // eslint-disable-next-line no-console, no-undef
+              console.log(
+                `Match par nom de fournisseur et proximité de date: ${
+                  match.fileName
+                } (date: ${match.fileDate.toISOString().split("T")[0]})`
+              );
+            }
+          }
         }
-        // b. Si pas de correspondance exacte, chercher par proximité
-        else {
-          // Filtrer d'abord par montant
-          const amountMatches = structuredPdfData.filter((pdf) =>
+
+        // Si pas de match par nom de fournisseur, continuer avec la stratégie existante
+        if (!match) {
+          // Nouvelle approche: d'abord chercher les factures par date exacte
+          const referenceDate =
+            transaction.isCBTransaction && transaction.cbDate
+              ? transaction.cbDate
+              : transaction.parsedDate;
+
+          // eslint-disable-next-line no-console, no-undef
+          console.log(
+            `Date de référence: ${referenceDate.toISOString().split("T")[0]}${
+              transaction.isCBTransaction && transaction.cbDate
+                ? " (extraite du libellé CB)"
+                : " (date de transaction)"
+            }`
+          );
+
+          // 1. Chercher les factures dont la date correspond exactement à la date de référence
+          const exactDatePdfs = structuredPdfData.filter(
+            (pdf) =>
+              pdf.fileDate.getFullYear() === referenceDate.getFullYear() &&
+              pdf.fileDate.getMonth() === referenceDate.getMonth() &&
+              pdf.fileDate.getDate() === referenceDate.getDate()
+          );
+
+          // eslint-disable-next-line no-console, no-undef
+          console.log(`Factures avec date exacte: ${exactDatePdfs.length}`);
+
+          // 2. Vérifier si l'une de ces factures contient le montant recherché
+          const exactDateAndAmountMatches = exactDatePdfs.filter((pdf) =>
             pdf.amounts.some(
               (amount) => Math.abs(amount - transaction.amount) < 0.01
             )
           );
 
-          if (amountMatches.length > 0) {
-            // Pour les transactions CB, utiliser la logique spéciale
-            if (transaction.isCBTransaction) {
-              // Calculer la différence de date pour chaque match potentiel
-              const matchesWithDiff = amountMatches.map((pdf) => ({
-                ...pdf,
-                dateDiff: Math.abs(
-                  pdf.fileDate.getTime() - transaction.parsedDate.getTime()
-                ),
-              }));
-
-              // Trier par différence de date
-              matchesWithDiff.sort((a, b) => a.dateDiff - b.dateDiff);
-              match = matchesWithDiff[0];
-
-              // eslint-disable-next-line no-console, no-undef
-              console.log(
-                `Meilleur match CB trouvé: ${
-                  match.fileName
-                } (différence: ${Math.round(
-                  match.dateDiff / (1000 * 60 * 60 * 24)
-                )} jours)`
+          if (exactDateAndAmountMatches.length > 0) {
+            match = exactDateAndAmountMatches[0];
+            // eslint-disable-next-line no-console, no-undef
+            console.log(
+              `Match parfait trouvé (date et montant): ${match.fileName}`
+            );
+          }
+          // 3. Si aucune correspondance parfaite, vérifier si une facture avec la date exacte existe
+          // même si le montant ne correspond pas exactement
+          else if (exactDatePdfs.length > 0) {
+            // Trier les factures par proximité de montant
+            const sortedByAmountProximity = [...exactDatePdfs].sort((a, b) => {
+              const aClosestAmount = a.amounts.reduce(
+                (closest, amount) =>
+                  Math.abs(amount - transaction.amount) <
+                  Math.abs(closest - transaction.amount)
+                    ? amount
+                    : closest,
+                a.amounts[0]
               );
-            }
-            // Pour les transactions non-CB, chercher par proximité de date
-            else {
-              // Même mois, jours précédents
-              const sameMonthPrevDays = amountMatches
-                .filter(
-                  (pdf) =>
-                    pdf.fileDate.getFullYear() ===
-                      transaction.parsedDate.getFullYear() &&
-                    pdf.fileDate.getMonth() ===
-                      transaction.parsedDate.getMonth() &&
-                    pdf.fileDate.getDate() < transaction.parsedDate.getDate()
+              const bClosestAmount = b.amounts.reduce(
+                (closest, amount) =>
+                  Math.abs(amount - transaction.amount) <
+                  Math.abs(closest - transaction.amount)
+                    ? amount
+                    : closest,
+                b.amounts[0]
+              );
+              return (
+                Math.abs(aClosestAmount - transaction.amount) -
+                Math.abs(bClosestAmount - transaction.amount)
+              );
+            });
+
+            match = sortedByAmountProximity[0];
+            const closestAmount = match.amounts.reduce(
+              (closest, amount) =>
+                Math.abs(amount - transaction.amount) <
+                Math.abs(closest - transaction.amount)
+                  ? amount
+                  : closest,
+              match.amounts[0]
+            );
+
+            // eslint-disable-next-line no-console, no-undef
+            console.log(
+              `Match par date exacte trouvé, mais montant différent: ${
+                match.fileName
+              } (montant le plus proche: ${closestAmount.toFixed(
+                2
+              )}, différence: ${Math.abs(
+                closestAmount - transaction.amount
+              ).toFixed(2)})`
+            );
+          }
+          // 4. Si toujours aucune correspondance, appliquer la logique existante
+          else {
+            // a. Chercher une correspondance exacte de date et de montant
+            const exactDateAndAmountMatches = structuredPdfData.filter(
+              (pdf) =>
+                pdf.fileDate.getFullYear() ===
+                  transaction.parsedDate.getFullYear() &&
+                pdf.fileDate.getMonth() === transaction.parsedDate.getMonth() &&
+                pdf.fileDate.getDate() === transaction.parsedDate.getDate() &&
+                pdf.amounts.some(
+                  (amount) => Math.abs(amount - transaction.amount) < 0.01
                 )
-                .sort((a, b) => b.day - a.day); // Trier par jour décroissant
+            );
 
-              if (sameMonthPrevDays.length > 0) {
-                match = sameMonthPrevDays[0];
-                // eslint-disable-next-line no-console, no-undef
-                console.log(
-                  `Match trouvé (même mois, jours précédents): ${match.fileName}`
-                );
-              } else {
-                // Même mois, jours suivants
-                const sameMonthNextDays = amountMatches
-                  .filter(
-                    (pdf) =>
-                      pdf.fileDate.getFullYear() ===
-                        transaction.parsedDate.getFullYear() &&
-                      pdf.fileDate.getMonth() ===
-                        transaction.parsedDate.getMonth() &&
-                      pdf.fileDate.getDate() > transaction.parsedDate.getDate()
-                  )
-                  .sort((a, b) => a.day - b.day); // Trier par jour croissant
+            if (exactDateAndAmountMatches.length > 0) {
+              match = exactDateAndAmountMatches[0];
+              // eslint-disable-next-line no-console, no-undef
+              console.log(`Match exact trouvé: ${match.fileName}`);
+            }
+            // b. Si pas de correspondance exacte, chercher par proximité
+            else {
+              // Filtrer d'abord par montant
+              const amountMatches = structuredPdfData.filter((pdf) =>
+                pdf.amounts.some(
+                  (amount) => Math.abs(amount - transaction.amount) < 0.01
+                )
+              );
 
-                if (sameMonthNextDays.length > 0) {
-                  match = sameMonthNextDays[0];
+              if (amountMatches.length > 0) {
+                // Pour les transactions CB, utiliser la logique spéciale
+                if (transaction.isCBTransaction) {
+                  // Utiliser la date extraite du libellé CB comme référence
+                  const cbReferenceDate =
+                    transaction.cbDate || transaction.parsedDate;
+
                   // eslint-disable-next-line no-console, no-undef
                   console.log(
-                    `Match trouvé (même mois, jours suivants): ${match.fileName}`
+                    `Date de référence pour CB: ${
+                      cbReferenceDate.toISOString().split("T")[0]
+                    }${
+                      transaction.cbDate
+                        ? " (extraite du libellé)"
+                        : " (date de transaction par défaut)"
+                    }`
                   );
-                } else {
-                  // Mois précédent
-                  const prevMonth = new Date(transaction.parsedDate);
-                  prevMonth.setMonth(prevMonth.getMonth() - 1);
 
-                  const prevMonthMatches = amountMatches
+                  // Afficher les factures candidates avec leurs dates pour le debug
+                  // eslint-disable-next-line no-console, no-undef
+                  console.log(
+                    `Factures candidates (${amountMatches.length}):`,
+                    amountMatches.map((pdf) => ({
+                      nom: pdf.fileName,
+                      date: pdf.fileDate.toISOString().split("T")[0],
+                      mois: pdf.fileDate.getMonth() + 1,
+                    }))
+                  );
+
+                  // Même mois, jours précédents
+                  const sameMonthPrevDays = amountMatches
                     .filter(
                       (pdf) =>
                         pdf.fileDate.getFullYear() ===
-                          prevMonth.getFullYear() &&
-                        pdf.fileDate.getMonth() === prevMonth.getMonth()
+                          cbReferenceDate.getFullYear() &&
+                        pdf.fileDate.getMonth() ===
+                          cbReferenceDate.getMonth() &&
+                        pdf.fileDate.getDate() < cbReferenceDate.getDate()
                     )
-                    .sort((a, b) => b.day - a.day); // Trier par jour décroissant
+                    .sort(
+                      (a, b) => b.fileDate.getDate() - a.fileDate.getDate()
+                    ); // Trier par jour décroissant
 
-                  if (prevMonthMatches.length > 0) {
-                    match = prevMonthMatches[0];
+                  if (sameMonthPrevDays.length > 0) {
+                    match = sameMonthPrevDays[0];
                     // eslint-disable-next-line no-console, no-undef
                     console.log(
-                      `Match trouvé (mois précédent): ${match.fileName}`
+                      `Match CB trouvé (même mois, jours précédents): ${match.fileName}`
                     );
                   } else {
-                    // Mois suivant
-                    const nextMonth = new Date(transaction.parsedDate);
-                    nextMonth.setMonth(nextMonth.getMonth() + 1);
-
-                    const nextMonthMatches = amountMatches
+                    // Même mois, jours suivants
+                    const sameMonthNextDays = amountMatches
                       .filter(
                         (pdf) =>
                           pdf.fileDate.getFullYear() ===
-                            nextMonth.getFullYear() &&
-                          pdf.fileDate.getMonth() === nextMonth.getMonth()
+                            cbReferenceDate.getFullYear() &&
+                          pdf.fileDate.getMonth() ===
+                            cbReferenceDate.getMonth() &&
+                          pdf.fileDate.getDate() > cbReferenceDate.getDate()
+                      )
+                      .sort(
+                        (a, b) => a.fileDate.getDate() - b.fileDate.getDate()
+                      ); // Trier par jour croissant
+
+                    if (sameMonthNextDays.length > 0) {
+                      match = sameMonthNextDays[0];
+                      // eslint-disable-next-line no-console, no-undef
+                      console.log(
+                        `Match CB trouvé (même mois, jours suivants): ${match.fileName}`
+                      );
+                    } else {
+                      // Mois précédent
+                      const prevMonth = new Date(cbReferenceDate);
+                      prevMonth.setMonth(prevMonth.getMonth() - 1);
+
+                      const prevMonthMatches = amountMatches
+                        .filter(
+                          (pdf) =>
+                            pdf.fileDate.getFullYear() ===
+                              prevMonth.getFullYear() &&
+                            pdf.fileDate.getMonth() === prevMonth.getMonth()
+                        )
+                        .sort(
+                          (a, b) => b.fileDate.getDate() - a.fileDate.getDate()
+                        ); // Trier par jour décroissant
+
+                      if (prevMonthMatches.length > 0) {
+                        match = prevMonthMatches[0];
+                        // eslint-disable-next-line no-console, no-undef
+                        console.log(
+                          `Match CB trouvé (mois précédent): ${match.fileName}`
+                        );
+                      } else {
+                        // Mois suivant
+                        const nextMonth = new Date(cbReferenceDate);
+                        nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+                        const nextMonthMatches = amountMatches
+                          .filter(
+                            (pdf) =>
+                              pdf.fileDate.getFullYear() ===
+                                nextMonth.getFullYear() &&
+                              pdf.fileDate.getMonth() === nextMonth.getMonth()
+                          )
+                          .sort(
+                            (a, b) =>
+                              a.fileDate.getDate() - b.fileDate.getDate()
+                          ); // Trier par jour croissant
+
+                        if (nextMonthMatches.length > 0) {
+                          match = nextMonthMatches[0];
+                          // eslint-disable-next-line no-console, no-undef
+                          console.log(
+                            `Match CB trouvé (mois suivant): ${match.fileName}`
+                          );
+                        } else {
+                          // Si aucune correspondance n'est trouvée avec la stratégie précédente,
+                          // on revient à la méthode de la différence de date la plus proche
+                          const matchesWithDiff = amountMatches.map((pdf) => ({
+                            ...pdf,
+                            dateDiff: Math.abs(
+                              pdf.fileDate.getTime() - cbReferenceDate.getTime()
+                            ),
+                          }));
+
+                          // Trier par différence de date
+                          matchesWithDiff.sort(
+                            (a, b) => a.dateDiff - b.dateDiff
+                          );
+                          match = matchesWithDiff[0];
+
+                          // eslint-disable-next-line no-console, no-undef
+                          console.log(
+                            `Match CB par proximité: ${
+                              match.fileName
+                            } (différence: ${Math.round(
+                              match.dateDiff / (1000 * 60 * 60 * 24)
+                            )} jours)`
+                          );
+                        }
+                      }
+                    }
+                  }
+                }
+                // Pour les transactions non-CB, chercher par proximité de date
+                else {
+                  // Même mois, jours précédents
+                  const sameMonthPrevDays = amountMatches
+                    .filter(
+                      (pdf) =>
+                        pdf.fileDate.getFullYear() ===
+                          transaction.parsedDate.getFullYear() &&
+                        pdf.fileDate.getMonth() ===
+                          transaction.parsedDate.getMonth() &&
+                        pdf.fileDate.getDate() <
+                          transaction.parsedDate.getDate()
+                    )
+                    .sort((a, b) => b.day - a.day); // Trier par jour décroissant
+
+                  if (sameMonthPrevDays.length > 0) {
+                    match = sameMonthPrevDays[0];
+                    // eslint-disable-next-line no-console, no-undef
+                    console.log(
+                      `Match trouvé (même mois, jours précédents): ${match.fileName}`
+                    );
+                  } else {
+                    // Même mois, jours suivants
+                    const sameMonthNextDays = amountMatches
+                      .filter(
+                        (pdf) =>
+                          pdf.fileDate.getFullYear() ===
+                            transaction.parsedDate.getFullYear() &&
+                          pdf.fileDate.getMonth() ===
+                            transaction.parsedDate.getMonth() &&
+                          pdf.fileDate.getDate() >
+                            transaction.parsedDate.getDate()
                       )
                       .sort((a, b) => a.day - b.day); // Trier par jour croissant
 
-                    if (nextMonthMatches.length > 0) {
-                      match = nextMonthMatches[0];
+                    if (sameMonthNextDays.length > 0) {
+                      match = sameMonthNextDays[0];
                       // eslint-disable-next-line no-console, no-undef
                       console.log(
-                        `Match trouvé (mois suivant): ${match.fileName}`
+                        `Match trouvé (même mois, jours suivants): ${match.fileName}`
                       );
+                    } else {
+                      // Mois précédent
+                      const prevMonth = new Date(transaction.parsedDate);
+                      prevMonth.setMonth(prevMonth.getMonth() - 1);
+
+                      const prevMonthMatches = amountMatches
+                        .filter(
+                          (pdf) =>
+                            pdf.fileDate.getFullYear() ===
+                              prevMonth.getFullYear() &&
+                            pdf.fileDate.getMonth() === prevMonth.getMonth()
+                        )
+                        .sort((a, b) => b.day - a.day); // Trier par jour décroissant
+
+                      if (prevMonthMatches.length > 0) {
+                        match = prevMonthMatches[0];
+                        // eslint-disable-next-line no-console, no-undef
+                        console.log(
+                          `Match trouvé (mois précédent): ${match.fileName}`
+                        );
+                      } else {
+                        // Mois suivant
+                        const nextMonth = new Date(transaction.parsedDate);
+                        nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+                        const nextMonthMatches = amountMatches
+                          .filter(
+                            (pdf) =>
+                              pdf.fileDate.getFullYear() ===
+                                nextMonth.getFullYear() &&
+                              pdf.fileDate.getMonth() === nextMonth.getMonth()
+                          )
+                          .sort((a, b) => a.day - b.day); // Trier par jour croissant
+
+                        if (nextMonthMatches.length > 0) {
+                          match = nextMonthMatches[0];
+                          // eslint-disable-next-line no-console, no-undef
+                          console.log(
+                            `Match trouvé (mois suivant): ${match.fileName}`
+                          );
+                        }
+                      }
                     }
                   }
                 }
