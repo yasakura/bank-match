@@ -17,6 +17,7 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
   const [progress, setProgress] = useState(0);
   const [pdfCache, setPdfCache] = useState(new Map()); // Cache pour stocker le contenu des PDF
   const [dateRange, setDateRange] = useState({ start: null, end: null });
+  const [manuallyMarked, setManuallyMarked] = useState(new Set()); // Ensemble des transactions marquées manuellement comme traitées
 
   // Désactiver le scroll du body quand la modale est ouverte
   useEffect(() => {
@@ -929,6 +930,27 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
     }).format(amount);
   };
 
+  // Fonction pour supprimer une correspondance
+  const removeMatch = (transactionReference) => {
+    const newMatches = new Map(matches);
+    newMatches.delete(transactionReference);
+    setMatches(newMatches);
+  };
+
+  // Fonction pour marquer une transaction comme traitée manuellement
+  const markAsManuallyProcessed = (transactionReference) => {
+    const newManuallyMarked = new Set(manuallyMarked);
+    newManuallyMarked.add(transactionReference);
+    setManuallyMarked(newManuallyMarked);
+  };
+
+  // Fonction pour annuler le marquage manuel d'une transaction
+  const unmarkManuallyProcessed = (transactionReference) => {
+    const newManuallyMarked = new Set(manuallyMarked);
+    newManuallyMarked.delete(transactionReference);
+    setManuallyMarked(newManuallyMarked);
+  };
+
   // Nettoyer les ressources lors de la fermeture de la modale
   useEffect(() => {
     return () => {
@@ -1036,34 +1058,68 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
                           <td>
                             {matchingStatus === "matching" ? (
                               <div className="loading loading-dots loading-xs" />
-                            ) : match ? (
-                              <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 rounded-full bg-success" />
-                                <div className="truncate text-sm">
-                                  {match.path.split("/").pop()}
+                            ) : matchingStatus === "done" ? (
+                              match ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 rounded-full bg-success" />
+                                  <div className="truncate text-sm">
+                                    {match.path.split("/").pop()}
+                                  </div>
                                 </div>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 rounded-full bg-error" />
-                                <span className="text-sm text-neutral/50">
-                                  Aucune correspondance
-                                </span>
-                              </div>
-                            )}
+                              ) : manuallyMarked.has(transaction.reference) ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 rounded-full bg-success" />
+                                  <span className="text-sm text-success">
+                                    Traité manuellement
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 rounded-full bg-error" />
+                                  <span className="text-sm text-neutral/50">
+                                    Aucune correspondance
+                                  </span>
+                                </div>
+                              )
+                            ) : null}
                           </td>
                           <td>
-                            <button
-                              className="btn btn-ghost btn-sm"
-                              disabled={!match}
-                              onClick={() => {
-                                if (match) {
-                                  // TODO: Afficher le PDF
-                                }
-                              }}
-                            >
-                              Voir
-                            </button>
+                            {matchingStatus === "done" ? (
+                              match ? (
+                                <button
+                                  className="btn btn-ghost btn-sm text-error w-32"
+                                  onClick={() =>
+                                    removeMatch(transaction.reference)
+                                  }
+                                >
+                                  Supprimer
+                                </button>
+                              ) : manuallyMarked.has(transaction.reference) ? (
+                                <button
+                                  className="btn btn-ghost btn-sm text-warning w-32"
+                                  onClick={() =>
+                                    unmarkManuallyProcessed(
+                                      transaction.reference
+                                    )
+                                  }
+                                >
+                                  Annuler
+                                </button>
+                              ) : (
+                                <button
+                                  className="btn btn-ghost btn-sm text-success w-32"
+                                  onClick={() =>
+                                    markAsManuallyProcessed(
+                                      transaction.reference
+                                    )
+                                  }
+                                >
+                                  À vérifier
+                                </button>
+                              )
+                            ) : (
+                              <span className="text-neutral/50">-</span>
+                            )}
                           </td>
                         </tr>
                       );
