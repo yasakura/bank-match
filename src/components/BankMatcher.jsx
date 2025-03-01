@@ -2,6 +2,11 @@ import React, { useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import { DocumentMagnifyingGlassIcon } from "@heroicons/react/24/outline";
 import * as pdfjsLib from "pdfjs-dist";
+import {
+  convertPdfPageToImage,
+  recognizeText,
+  terminateTesseractWorker,
+} from "../utils/tesseract-utils";
 
 // Initialiser le worker PDF.js
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
@@ -28,9 +33,6 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
 
     try {
       for await (const entry of handle.values()) {
-        // eslint-disable-next-line no-console, no-undef
-        console.log(`- Entrée trouvée: ${entry.name} (${entry.kind})`);
-
         if (
           entry.kind === "file" &&
           entry.name.toLowerCase().endsWith(".pdf")
@@ -39,8 +41,6 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
             handle: entry,
             path: path ? `${path}/${entry.name}` : entry.name,
           });
-          // eslint-disable-next-line no-console, no-undef
-          console.log(`  → PDF ajouté: ${path}/${entry.name}`);
         } else if (entry.kind === "directory") {
           try {
             const subHandle = await handle.getDirectoryHandle(entry.name);
@@ -81,234 +81,193 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
 
   const extractPdfContent = async (fileHandle) => {
     try {
-      // eslint-disable-next-line no-console, no-undef
-      console.log("Début de la lecture du PDF");
-
       // Convertir le FileHandle en ArrayBuffer
       const file = await fileHandle.getFile();
       const arrayBuffer = await file.arrayBuffer();
+      const fileName = file.name;
 
       // eslint-disable-next-line no-console, no-undef
-      console.log("PDF chargé en mémoire, création du document...");
+      console.log(
+        `Lecture du PDF: ${fileName} (taille: ${Math.round(
+          arrayBuffer.byteLength / 1024
+        )} KB)`
+      );
 
       // Charger le PDF
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       let fullText = "";
+      let usedOcr = false;
 
       // eslint-disable-next-line no-console, no-undef
-      console.log(`PDF chargé, lecture des ${pdf.numPages} pages...`);
+      console.log(`PDF chargé: ${fileName}, ${pdf.numPages} page(s)`);
 
       // Extraire le texte de chaque page
       for (let i = 1; i <= pdf.numPages; i++) {
-        // eslint-disable-next-line no-console, no-undef
-        console.log(`Lecture de la page ${i}...`);
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items.map((item) => item.str).join(" ");
-        fullText += pageText + "\n";
-        // eslint-disable-next-line no-console, no-undef
-        console.log(`Page ${i} : ${pageText.substring(0, 100)}...`);
+        try {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          let pageText = textContent.items.map((item) => item.str).join(" ");
+
+          // eslint-disable-next-line no-console, no-undef
+          console.log(
+            `Page ${i}/${pdf.numPages} de ${fileName}: ${textContent.items.length} éléments de texte`
+          );
+
+          // Si le texte est vide ou très court, essayer d'extraire le texte via OCR
+          if (pageText.trim().length < 10) {
+            // eslint-disable-next-line no-console, no-undef
+            console.log(
+              `⚠️ Texte très court détecté dans ${fileName}, page ${i}: "${pageText}". Tentative d'OCR...`
+            );
+
+            try {
+              // Convertir la page PDF en image pour l'OCR
+              const canvas = await convertPdfPageToImage(page);
+
+              // Effectuer l'OCR sur l'image
+              const ocrText = await recognizeText(canvas);
+
+              // eslint-disable-next-line no-console, no-undef
+              console.log(
+                `OCR effectué sur la page ${i} de ${fileName}. Texte extrait: ${ocrText.length} caractères`
+              );
+
+              // Remplacer le texte de la page par celui obtenu via OCR
+              pageText = ocrText;
+              usedOcr = true;
+            } catch (ocrErr) {
+              // eslint-disable-next-line no-console, no-undef
+              console.error(
+                `Erreur lors de l'OCR sur la page ${i} de ${fileName}:`,
+                ocrErr.message
+              );
+            }
+          }
+
+          fullText += pageText + "\n";
+        } catch (pageErr) {
+          // eslint-disable-next-line no-console, no-undef
+          console.error(
+            `Erreur lors de la lecture de la page ${i} de ${fileName}:`,
+            pageErr.message
+          );
+        }
       }
 
-      // Rechercher des montants dans le texte (format: 123,45 ou 123.45)
+      // Vérifier si le texte extrait est vide ou très court
+      if (fullText.trim().length < 20 && !usedOcr) {
+        // eslint-disable-next-line no-console, no-undef
+        console.warn(
+          `⚠️ PDF probablement scanné ou image: ${fileName}. Texte extrait: "${fullText.trim()}". Tentative d'OCR sur toutes les pages...`
+        );
+
+        // Essayer d'extraire le texte via OCR sur toutes les pages
+        try {
+          let ocrFullText = "";
+
+          for (let i = 1; i <= pdf.numPages; i++) {
+            try {
+              const page = await pdf.getPage(i);
+              const canvas = await convertPdfPageToImage(page);
+              const ocrText = await recognizeText(canvas);
+
+              // eslint-disable-next-line no-console, no-undef
+              console.log(
+                `OCR effectué sur la page ${i} de ${fileName}. Texte extrait: ${ocrText.length} caractères`
+              );
+
+              ocrFullText += ocrText + "\n";
+            } catch (ocrErr) {
+              // eslint-disable-next-line no-console, no-undef
+              console.error(
+                `Erreur lors de l'OCR sur la page ${i} de ${fileName}:`,
+                ocrErr.message
+              );
+            }
+          }
+
+          if (ocrFullText.trim().length > fullText.trim().length) {
+            // eslint-disable-next-line no-console, no-undef
+            console.log(
+              `Utilisation du texte OCR pour ${fileName} (${ocrFullText.length} caractères vs ${fullText.length})`
+            );
+            fullText = ocrFullText;
+            usedOcr = true;
+          }
+        } catch (ocrErr) {
+          // eslint-disable-next-line no-console, no-undef
+          console.error(
+            `Erreur lors de l'OCR global sur ${fileName}:`,
+            ocrErr.message
+          );
+        }
+      }
+
+      // Rechercher des montants dans le texte (format: 123,45 ou 123.45 ou 123,456)
       const amounts =
         fullText
-          .replace(/(\d+),(\d{2})/g, "$1.$2") // Convertir toutes les virgules en points
-          .match(/\d+\.\d{2}/g) || [];
-      const parsedAmounts = amounts.map((amount) => parseFloat(amount));
+          .replace(/(\d+)[,.](\d{2,3})/g, "$1.$2") // Convertir les virgules en points et accepter 2 ou 3 décimales
+          .match(/\d+\.\d{2,3}/g) || [];
+
+      // Normaliser et arrondir tous les montants à 2 décimales
+      const parsedAmounts = [
+        ...new Set(
+          amounts.map((amount) => Math.round(parseFloat(amount) * 100) / 100)
+        ),
+      ];
 
       // eslint-disable-next-line no-console, no-undef
-      console.log("Montants trouvés dans le PDF:", parsedAmounts);
-      // eslint-disable-next-line no-console, no-undef
-      console.log("Texte extrait:", fullText.substring(0, 200) + "...");
+      console.log(
+        `Montants trouvés dans ${fileName}:`,
+        parsedAmounts.map((m) => m.toFixed(2))
+      );
+
+      // Si aucun montant n'est trouvé, avertir mais ne pas essayer d'extraire du nom de fichier
+      if (parsedAmounts.length === 0) {
+        // eslint-disable-next-line no-console, no-undef
+        console.warn(
+          `⚠️ Aucun montant trouvé dans le texte du PDF ${fileName}`
+        );
+      }
 
       return {
         text: fullText,
         amounts: parsedAmounts,
+        isScanned: !usedOcr && fullText.trim().length < 20,
+        usedOcr,
       };
     } catch (err) {
       // eslint-disable-next-line no-console, no-undef
-      console.error("Erreur détaillée lors de la lecture du PDF:", {
-        message: err.message,
-        stack: err.stack,
-        name: err.name,
-      });
+      console.error("Erreur lors de la lecture du PDF:", err.message);
       return null;
     }
   };
 
-  const findMatchingFiles = async (transaction, pdfFiles, cache, dateRange) => {
-    // eslint-disable-next-line no-console, no-undef
-    console.log("\n=== Nouvelle recherche ===");
-    // eslint-disable-next-line no-console, no-undef
-    console.log("Transaction:", {
-      date: transaction.date,
-      libelle: transaction.libelle,
-      montant: transaction.montant,
-      detail: transaction.detail,
-    });
-
-    const formattedDate = formatDate(transaction.date);
-    const transactionDate = new Date(formattedDate);
-    const amount = Math.abs(transaction.montant);
-
-    // eslint-disable-next-line no-console, no-undef
-    console.log("Critères de recherche:", {
-      dateFormatee: formattedDate,
-      montant: amount,
-    });
-
-    const parseDate = (dateStr) => {
-      try {
-        // Format ISO YYYY-MM-DD
-        if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-          return new Date(dateStr);
-        }
-
-        // Format DD/MM/YYYY ou DD-MM-YYYY
-        const match1 = dateStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-        if (match1) {
-          const [, day, month, year] = match1;
-          return new Date(year, month - 1, day);
-        }
-
-        // Format DD/MM/YY ou DD-MM-YY
-        const match2 = dateStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2})$/);
-        if (match2) {
-          const [, day, month, year] = match2;
-          return new Date("20" + year, month - 1, day);
-        }
-
-        return null;
-      } catch (err) {
-        return null;
+  const parseDate = (dateStr) => {
+    try {
+      // Format ISO YYYY-MM-DD
+      if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        return new Date(dateStr);
       }
-    };
 
-    for (const pdf of pdfFiles) {
-      try {
-        // eslint-disable-next-line no-console, no-undef
-        console.log("\nAnalyse du fichier:", pdf.path);
-
-        // Utiliser le contenu en cache
-        const pdfContent = cache.get(pdf.path);
-        if (!pdfContent) {
-          // eslint-disable-next-line no-console, no-undef
-          console.log("→ Fichier ignoré : contenu non trouvé dans le cache");
-          continue;
-        }
-
-        // eslint-disable-next-line no-console, no-undef
-        console.log("Contenu du PDF:", {
-          taille: pdfContent.text.length,
-          extrait: pdfContent.text.substring(0, 100),
-          montantsTrouves: pdfContent.amounts,
-        });
-
-        // 1. Vérifier le montant
-        const hasMatchingAmount = pdfContent.amounts.some(
-          (pdfAmount) => Math.abs(pdfAmount - amount) < 0.01
-        );
-
-        if (!hasMatchingAmount) {
-          // eslint-disable-next-line no-console, no-undef
-          console.log("→ Fichier ignoré : montant non trouvé");
-          // eslint-disable-next-line no-console, no-undef
-          console.log("  Montants PDF:", pdfContent.amounts);
-          // eslint-disable-next-line no-console, no-undef
-          console.log("  Montant recherché:", amount);
-          continue;
-        }
-
-        // 2. Vérifier la date
-        let fileDate = null;
-        let dateSource = "";
-
-        // Chercher dans le nom du fichier d'abord
-        const fileNameMatch = pdf.path.match(/\d{4}[-]?\d{2}[-]?\d{2}/);
-        if (fileNameMatch) {
-          const possibleDate = parseDate(fileNameMatch[0].replace(/-/g, "-"));
-          if (possibleDate) {
-            fileDate = possibleDate;
-            dateSource = "nom du fichier";
-          }
-        }
-
-        // Si pas de date dans le nom, chercher dans le contenu
-        if (!fileDate) {
-          // Chercher tous les formats possibles de date dans le texte
-          const dateMatches =
-            pdfContent.text.match(/\d{1,4}[/-]\d{1,2}[/-]\d{1,4}/g) || [];
-
-          for (const dateStr of dateMatches) {
-            const possibleDate = parseDate(dateStr);
-            if (possibleDate) {
-              // Si on n'a pas encore de date ou si cette date est plus proche de la date de transaction
-              if (
-                !fileDate ||
-                Math.abs(possibleDate - transactionDate) <
-                  Math.abs(fileDate - transactionDate)
-              ) {
-                fileDate = possibleDate;
-                dateSource = "contenu";
-              }
-            }
-          }
-        }
-
-        if (!fileDate) {
-          // eslint-disable-next-line no-console, no-undef
-          console.log("→ Fichier ignoré : pas de date valide trouvée");
-          continue;
-        }
-
-        // eslint-disable-next-line no-console, no-undef
-        console.log(
-          `- Date trouvée dans ${dateSource}:`,
-          fileDate.toISOString().split("T")[0]
-        );
-
-        // Vérifier si la date est dans la plage du CSV
-        if (
-          fileDate &&
-          dateRange.start &&
-          dateRange.end &&
-          fileDate >= dateRange.start &&
-          fileDate <= dateRange.end
-        ) {
-          // eslint-disable-next-line no-console, no-undef
-          console.log("→ Match trouvé ! Date et montant correspondent.");
-          return {
-            handle: pdf.handle,
-            path: pdf.path,
-            score: 100,
-            fileDate: fileDate,
-          };
-        } else {
-          // eslint-disable-next-line no-console, no-undef
-          console.log(
-            `→ Fichier ignoré : date ${
-              fileDate ? "hors plage" : "invalide"
-            } (plage attendue : ${
-              dateRange.start
-                ? dateRange.start.toISOString().split("T")[0]
-                : "non définie"
-            } - ${
-              dateRange.end
-                ? dateRange.end.toISOString().split("T")[0]
-                : "non définie"
-            })`
-          );
-        }
-      } catch (err) {
-        // eslint-disable-next-line no-console, no-undef
-        console.error("Erreur lors de l'analyse du fichier:", pdf.path, err);
+      // Format DD/MM/YYYY ou DD-MM-YYYY
+      const match1 = dateStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+      if (match1) {
+        const [, day, month, year] = match1;
+        return new Date(year, month - 1, day);
       }
+
+      // Format DD/MM/YY ou DD-MM-YY
+      const match2 = dateStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2})$/);
+      if (match2) {
+        const [, day, month, year] = match2;
+        return new Date("20" + year, month - 1, day);
+      }
+
+      return null;
+    } catch (err) {
+      return null;
     }
-
-    // eslint-disable-next-line no-console, no-undef
-    console.log("\nAucun match trouvé");
-    return null;
   };
 
   const startMatching = async () => {
@@ -316,16 +275,41 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
     setProgress(0);
 
     try {
-      // Calculer la plage de dates du CSV
-      const dates = transactions.map((t) => new Date(formatDate(t.date)));
+      // 1. Parsing du CSV et calcul de la plage de dates
+      const parsedTransactions = transactions.map((t) => {
+        const formattedDate = formatDate(t.date);
+        let transactionDate = new Date(formattedDate);
+        const amount = Math.abs(t.montant);
+        const isCBTransaction = t.libelle.startsWith("CB");
+        let cbDate = null;
+
+        // Extraire la date des opérations CB si présente
+        if (isCBTransaction) {
+          const cbDateMatch = t.libelle.match(/\[(\d{6})\]/);
+          if (cbDateMatch) {
+            const [, cbDateStr] = cbDateMatch;
+            const day = cbDateStr.substring(0, 2);
+            const month = cbDateStr.substring(2, 4);
+            const year = "20" + cbDateStr.substring(4, 6);
+            cbDate = new Date(year, parseInt(month) - 1, parseInt(day));
+            transactionDate = cbDate;
+          }
+        }
+
+        return {
+          ...t,
+          parsedDate: transactionDate,
+          amount,
+          isCBTransaction,
+          cbDate,
+        };
+      });
+
+      // 2. Calcul de la plage de dates du CSV
+      const dates = parsedTransactions.map((t) => t.parsedDate);
       const endDate = new Date(Math.max(...dates));
       const startDate = new Date(Math.min(...dates));
-
-      // Étendre la date de début de 45 jours dans le passé
-      startDate.setDate(startDate.getDate() - 45);
-
-      // Définir la plage de dates localement plutôt que dans l'état
-      const localDateRange = { start: startDate, end: endDate };
+      startDate.setDate(startDate.getDate() - 45); // Étendre la date de début de 45 jours dans le passé
 
       // eslint-disable-next-line no-console, no-undef
       console.log("Plage de dates du CSV (étendue):", {
@@ -333,21 +317,12 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
         fin: endDate.toISOString().split("T")[0],
       });
 
-      // Récupérer tous les fichiers PDF des dossiers sélectionnés
+      // 3. Récupérer tous les fichiers PDF des dossiers sélectionnés
       const pdfFiles = [];
-      // eslint-disable-next-line no-console, no-undef
-      console.log("Dossiers sélectionnés:", [...selectedFolders]);
-      // eslint-disable-next-line no-console, no-undef
-      console.log("Handle du dossier racine:", folderHandle);
-
       for (const folderName of selectedFolders) {
         try {
-          // eslint-disable-next-line no-console, no-undef
-          console.log("Scan du dossier:", folderName);
           const dirHandle = await folderHandle.getDirectoryHandle(folderName);
           const files = await scanFolder(dirHandle, folderName);
-          // eslint-disable-next-line no-console, no-undef
-          console.log(`Fichiers trouvés dans ${folderName}:`, files);
           pdfFiles.push(...files);
         } catch (err) {
           // eslint-disable-next-line no-console, no-undef
@@ -358,48 +333,248 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
       // eslint-disable-next-line no-console, no-undef
       console.log("Total des fichiers PDF trouvés:", pdfFiles.length);
 
-      // Pré-charger tous les PDF
+      // 4. Pré-charger tous les PDF et créer un tableau structuré
       const newPdfCache = new Map();
       let loadedPdfs = 0;
-
-      // eslint-disable-next-line no-console, no-undef
-      console.log("Chargement initial des PDF...");
+      const structuredPdfData = [];
 
       for (const pdf of pdfFiles) {
         const content = await extractPdfContent(pdf.handle);
         if (content) {
           newPdfCache.set(pdf.path, content);
+
+          // Extraire la date du nom du fichier
+          let fileDate = null;
+          const fileNameMatch = pdf.path.match(/\d{4}[-]?\d{2}[-]?\d{2}/);
+          if (fileNameMatch) {
+            const possibleDate = parseDate(fileNameMatch[0].replace(/-/g, "-"));
+            if (possibleDate) {
+              fileDate = possibleDate;
+            }
+          }
+
+          // Si pas de date dans le nom du fichier, essayer d'extraire du nom du fichier au format JJ_MM_YY
+          if (!fileDate) {
+            const altDateMatch = pdf.path.match(/(\d{2})_(\d{2})_(\d{2})/);
+            if (altDateMatch) {
+              const [, day, month, year] = altDateMatch;
+              fileDate = new Date(
+                `20${year}`,
+                parseInt(month) - 1,
+                parseInt(day)
+              );
+              // eslint-disable-next-line no-console, no-undef
+              console.log(
+                `Date alternative trouvée dans ${pdf.path}: ${
+                  fileDate.toISOString().split("T")[0]
+                }`
+              );
+            }
+          }
+
+          if (fileDate) {
+            structuredPdfData.push({
+              handle: pdf.handle,
+              path: pdf.path,
+              fileName: pdf.path.split("/").pop(),
+              fileDate,
+              amounts: content.amounts,
+              year: fileDate.getFullYear(),
+              month: fileDate.getMonth(),
+              day: fileDate.getDate(),
+              isScanned: content.isScanned,
+            });
+          } else {
+            // eslint-disable-next-line no-console, no-undef
+            console.warn(`⚠️ Pas de date trouvée pour ${pdf.path}`);
+          }
+        } else {
+          // eslint-disable-next-line no-console, no-undef
+          console.warn(`⚠️ Impossible d'extraire le contenu de ${pdf.path}`);
         }
         loadedPdfs++;
         setProgress(Math.round((loadedPdfs / pdfFiles.length) * 50)); // 50% de la barre de progression pour le chargement
       }
 
       setPdfCache(newPdfCache);
-
       // eslint-disable-next-line no-console, no-undef
       console.log(`${newPdfCache.size} PDF chargés en mémoire`);
+      // eslint-disable-next-line no-console, no-undef
+      console.log("Données PDF structurées:", structuredPdfData.length);
 
-      // Pour chaque transaction, chercher les fichiers correspondants
+      // 5. Matching des transactions
       const newMatches = new Map();
       let processed = 0;
 
-      for (const transaction of transactions) {
-        const match = await findMatchingFiles(
-          transaction,
-          pdfFiles,
-          newPdfCache,
-          localDateRange
+      for (const transaction of parsedTransactions) {
+        // eslint-disable-next-line no-console, no-undef
+        console.log("\n=== Nouvelle recherche ===");
+        // eslint-disable-next-line no-console, no-undef
+        console.log("Transaction:", {
+          date: transaction.parsedDate.toISOString().split("T")[0],
+          libelle: transaction.libelle,
+          montant: transaction.amount.toFixed(2),
+          isCB: transaction.isCBTransaction,
+        });
+
+        // Stratégie de matching
+        let match = null;
+
+        // a. Chercher une correspondance exacte de date
+        const exactDateMatches = structuredPdfData.filter(
+          (pdf) =>
+            pdf.fileDate.getFullYear() ===
+              transaction.parsedDate.getFullYear() &&
+            pdf.fileDate.getMonth() === transaction.parsedDate.getMonth() &&
+            pdf.fileDate.getDate() === transaction.parsedDate.getDate() &&
+            pdf.amounts.some(
+              (amount) => Math.abs(amount - transaction.amount) < 0.01
+            )
         );
-        if (match) {
-          newMatches.set(transaction.reference, match);
+
+        if (exactDateMatches.length > 0) {
+          match = exactDateMatches[0];
+          // eslint-disable-next-line no-console, no-undef
+          console.log(`Match exact trouvé: ${match.fileName}`);
         }
+        // b. Si pas de correspondance exacte, chercher par proximité
+        else {
+          // Filtrer d'abord par montant
+          const amountMatches = structuredPdfData.filter((pdf) =>
+            pdf.amounts.some(
+              (amount) => Math.abs(amount - transaction.amount) < 0.01
+            )
+          );
+
+          if (amountMatches.length > 0) {
+            // Pour les transactions CB, utiliser la logique spéciale
+            if (transaction.isCBTransaction) {
+              // Calculer la différence de date pour chaque match potentiel
+              const matchesWithDiff = amountMatches.map((pdf) => ({
+                ...pdf,
+                dateDiff: Math.abs(
+                  pdf.fileDate.getTime() - transaction.parsedDate.getTime()
+                ),
+              }));
+
+              // Trier par différence de date
+              matchesWithDiff.sort((a, b) => a.dateDiff - b.dateDiff);
+              match = matchesWithDiff[0];
+
+              // eslint-disable-next-line no-console, no-undef
+              console.log(
+                `Meilleur match CB trouvé: ${
+                  match.fileName
+                } (différence: ${Math.round(
+                  match.dateDiff / (1000 * 60 * 60 * 24)
+                )} jours)`
+              );
+            }
+            // Pour les transactions non-CB, chercher par proximité de date
+            else {
+              // Même mois, jours précédents
+              const sameMonthPrevDays = amountMatches
+                .filter(
+                  (pdf) =>
+                    pdf.fileDate.getFullYear() ===
+                      transaction.parsedDate.getFullYear() &&
+                    pdf.fileDate.getMonth() ===
+                      transaction.parsedDate.getMonth() &&
+                    pdf.fileDate.getDate() < transaction.parsedDate.getDate()
+                )
+                .sort((a, b) => b.day - a.day); // Trier par jour décroissant
+
+              if (sameMonthPrevDays.length > 0) {
+                match = sameMonthPrevDays[0];
+                // eslint-disable-next-line no-console, no-undef
+                console.log(
+                  `Match trouvé (même mois, jours précédents): ${match.fileName}`
+                );
+              } else {
+                // Même mois, jours suivants
+                const sameMonthNextDays = amountMatches
+                  .filter(
+                    (pdf) =>
+                      pdf.fileDate.getFullYear() ===
+                        transaction.parsedDate.getFullYear() &&
+                      pdf.fileDate.getMonth() ===
+                        transaction.parsedDate.getMonth() &&
+                      pdf.fileDate.getDate() > transaction.parsedDate.getDate()
+                  )
+                  .sort((a, b) => a.day - b.day); // Trier par jour croissant
+
+                if (sameMonthNextDays.length > 0) {
+                  match = sameMonthNextDays[0];
+                  // eslint-disable-next-line no-console, no-undef
+                  console.log(
+                    `Match trouvé (même mois, jours suivants): ${match.fileName}`
+                  );
+                } else {
+                  // Mois précédent
+                  const prevMonth = new Date(transaction.parsedDate);
+                  prevMonth.setMonth(prevMonth.getMonth() - 1);
+
+                  const prevMonthMatches = amountMatches
+                    .filter(
+                      (pdf) =>
+                        pdf.fileDate.getFullYear() ===
+                          prevMonth.getFullYear() &&
+                        pdf.fileDate.getMonth() === prevMonth.getMonth()
+                    )
+                    .sort((a, b) => b.day - a.day); // Trier par jour décroissant
+
+                  if (prevMonthMatches.length > 0) {
+                    match = prevMonthMatches[0];
+                    // eslint-disable-next-line no-console, no-undef
+                    console.log(
+                      `Match trouvé (mois précédent): ${match.fileName}`
+                    );
+                  } else {
+                    // Mois suivant
+                    const nextMonth = new Date(transaction.parsedDate);
+                    nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+                    const nextMonthMatches = amountMatches
+                      .filter(
+                        (pdf) =>
+                          pdf.fileDate.getFullYear() ===
+                            nextMonth.getFullYear() &&
+                          pdf.fileDate.getMonth() === nextMonth.getMonth()
+                      )
+                      .sort((a, b) => a.day - b.day); // Trier par jour croissant
+
+                    if (nextMonthMatches.length > 0) {
+                      match = nextMonthMatches[0];
+                      // eslint-disable-next-line no-console, no-undef
+                      console.log(
+                        `Match trouvé (mois suivant): ${match.fileName}`
+                      );
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if (match) {
+          newMatches.set(transaction.reference, {
+            handle: match.handle,
+            path: match.path,
+            score: 100,
+            fileDate: match.fileDate,
+          });
+        } else {
+          // eslint-disable-next-line no-console, no-undef
+          console.log("Aucun match trouvé");
+        }
+
         processed++;
         setProgress(50 + Math.round((processed / transactions.length) * 50));
       }
 
       setMatches(newMatches);
-      // Mettre à jour dateRange à la fin
-      setDateRange(localDateRange);
+      setDateRange({ start: startDate, end: endDate });
     } catch (err) {
       // eslint-disable-next-line no-console, no-undef
       console.error("Erreur lors du rapprochement:", err);
@@ -414,6 +589,21 @@ function BankMatcher({ transactions, folderHandle, selectedFolders, onClose }) {
       currency: "EUR",
     }).format(amount);
   };
+
+  // Nettoyer les ressources lors de la fermeture de la modale
+  useEffect(() => {
+    return () => {
+      // Nettoyer le worker Tesseract lors du démontage du composant
+      // eslint-disable-next-line no-unused-vars
+      terminateTesseractWorker().catch((err) => {
+        // eslint-disable-next-line no-console, no-undef
+        console.error(
+          "Erreur lors de la terminaison du worker Tesseract:",
+          err
+        );
+      });
+    };
+  }, []);
 
   return (
     <div className="fixed inset-0 bg-base-200/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
