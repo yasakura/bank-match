@@ -35,6 +35,11 @@ function CsvUploader({ onDataLoaded }) {
     const transactions = data
       .slice(headerIndex + 1)
       .filter((row) => row && row.length >= 5) // Vérifier qu'on a au moins les colonnes essentielles
+      .filter((row) => {
+        // Vérifier que la première colonne contient une date au format JJ/MM/AA ou JJ/MM/AAAA
+        const dateStr = row[0] && row[0].trim();
+        return dateStr && /^\d{2}\/\d{2}\/\d{2,4}$/.test(dateStr);
+      })
       .map((row) => {
         // Déterminer si c'est un débit ou un crédit
         const debitStr = row[3] && row[3].trim();
